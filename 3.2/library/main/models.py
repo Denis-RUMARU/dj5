@@ -15,4 +15,4 @@ class Order(models.Model):
     days_count = models.PositiveSmallIntegerField(default=1, verbose_name='Количество дней заказа')
     date = models.DateField(auto_now_add=True, verbose_name='Дата')
     books = models.ManyToManyField(Book)
-
+    is_active = models.BooleanField(default=True, verbose_name='Активен')

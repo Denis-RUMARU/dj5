@@ -3,62 +3,75 @@ from rest_framework.decorators import api_view
 from rest_framework.generics import RetrieveAPIView, UpdateAPIView, DestroyAPIView
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework import status
+from rest_framework.exceptions import ValidationError
 
 from main.models import Book, Order
 from main.serializers import BookSerializer, OrderSerializer
+from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
 
 
 @api_view(['GET'])
 def books_list(request):
     books = Book.objects.all()
     serializer = BookSerializer(books, many=True)
-
     return Response(serializer.data)
 
 
 class CreateBookView(APIView):
-    def post(self, request):
-        # получите данные из запроса
-        serializer = BookSerializer(data=request.data) #передайте данные из запроса в сериализатор
-        if serializer.is_valid(raise_exception=True): #если данные валидны
-            return Response('Книга успешно создана') # возвращаем ответ об этом
+    throttle_classes = [AnonRateThrottle]
 
+    def post(self, request):
+        serializer = BookSerializer(data=request.data)
+        if serializer.is_valid(raise_exception=True):
+            serializer.save()
+            return Response('Книга успешно создана', status=status.HTTP_201_CREATED)
 
 class BookDetailsView(RetrieveAPIView):
-    def get(self, request, pk):
-        try:
-            book = Book.objects.get(id=pk)
-            ser = BookSerializer(book)
-            return Response(ser.data)
-        except Book.DoesNotExist:
-            return Response(status=404)
-
+    throttle_classes = [UserRateThrottle]
+    queryset = Book.objects.all()
+    serializer_class = BookSerializer
 
 class BookUpdateView(UpdateAPIView):
-        serializer_class = BookSerializer
-
-        def patch(self, request, id):
-            try:
-                book = Book.objects.get(id=id)
-                serializer = self.get_serializer(book, data=request.data)
-                if serializer.is_valid(raise_exception=True):
-                    serializer.save()
-                    return Response('Книга успешно обновлена')
-            except Book.DoesNotExist:
-                return Response(status=404)
-
+    throttle_classes = [UserRateThrottle]
+    queryset = Book.objects.all()
+    serializer_class = BookSerializer
 
 class BookDeleteView(DestroyAPIView):
-    # реализуйте логику удаления объявления
-    def delete(self, request, id):
-        try:
-            product = Book.objects.get(id=id)
-            product.delete()
-            return Response('Книга успешно удалена')
-        except Book.DoesNotExist:
-            return Response(status=404)
-
+    throttle_classes = [UserRateThrottle]
+    queryset = Book.objects.all()
+    serializer_class = BookSerializer
 
 class OrderViewSet(viewsets.ModelViewSet):
+    throttle_classes = [UserRateThrottle]
     queryset = Order.objects.all()
     serializer_class = OrderSerializer
+
+    def create(self, request, *args, **kwargs):
+        user_name = request.data.get('user_name')
+        active_orders_count = Order.objects.filter(user_name=user_name, is_active=True).count()
+
+        if active_orders_count >= 10:
+            raise ValidationError("Вы не можете создать более 10 активных заказов.")
+
+        return super().create(request, *args, **kwargs)
+
+    def update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        data = request.data
+
+        # Проверка на открытое объявление
+        if data.get('is_active', instance.is_active):
+            user_name = data.get('user_name', instance.user_name)
+            active_orders_count = Order.objects.filter(user_name=user_name, is_active=True).count()
+
+            if active_orders_count >= 10:
+                raise ValidationError("Вы не можете иметь более 10 активных заказов.")
+
+        return super().update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        instance.is_active = False
+        instance.save()
+        return Response({'detail': 'Заказ успешно удален'}, status=status.HTTP_204_NO_CONTENT)
